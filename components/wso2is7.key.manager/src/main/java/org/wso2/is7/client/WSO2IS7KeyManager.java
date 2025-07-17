@@ -73,6 +73,7 @@ import org.wso2.is7.client.model.WSO2IS7PatchRoleOperationInfo;
 import org.wso2.is7.client.model.WSO2IS7RoleInfo;
 import org.wso2.is7.client.model.WSO2IS7SCIMMeClient;
 import org.wso2.is7.client.model.WSO2IS7SCIMRolesClient;
+import org.wso2.is7.client.model.WSO2IS7SCIMSchemasClient;
 import org.wso2.is7.client.utils.AttributeMapper;
 import org.wso2.is7.client.utils.ClaimMappingReader;
 
@@ -121,6 +122,7 @@ public class WSO2IS7KeyManager extends AbstractKeyManager {
     private WSO2IS7APIResourceManagementClient wso2IS7APIResourceManagementClient;
     private WSO2IS7SCIMRolesClient wso2IS7SCIMRolesClient;
     private WSO2IS7SCIMMeClient wso2IS7SCIMMeClient;
+    private WSO2IS7SCIMSchemasClient wso2IS7SCIMSchemasClient;
     private Map<String, String> claimMappings;
 
 
@@ -689,6 +691,14 @@ public class WSO2IS7KeyManager extends AbstractKeyManager {
                             (APIConstants.KeyManager.KEY_MANAGER_OPERATIONS_USERINFO_ENDPOINT);
         }
 
+        String schemasEndpoint;
+        if (StringUtils.lowerCase(userInfoEndpoint).endsWith("/me")) {
+            schemasEndpoint = userInfoEndpoint.replaceAll("(?i)/me$", "/Schemas");
+        } else {
+            throw new APIManagementException("Error occurred while getting the Schemas endpoint from the user " +
+                    "info endpoint. The user info endpoint doesn't ends with \"/Me\"");
+        }
+
         String apiResourceManagementEndpoint;
         if (configuration.getParameter(API_RESOURCE_MANAGEMENT_ENDPOINT) != null) {
             apiResourceManagementEndpoint = (String) configuration.getParameter(API_RESOURCE_MANAGEMENT_ENDPOINT);
@@ -745,6 +755,14 @@ public class WSO2IS7KeyManager extends AbstractKeyManager {
                 .logger(new Slf4jLogger())
                 .errorDecoder(new KMClientErrorDecoder())
                 .target(WSO2IS7SCIMMeClient.class, userInfoEndpoint);
+
+        wso2IS7SCIMSchemasClient = Feign.builder()
+                .client(new ApacheFeignHttpClient(APIUtil.getHttpClient(schemasEndpoint)))
+                .encoder(new GsonEncoder())
+                .decoder(new GsonDecoder())
+                .logger(new Slf4jLogger())
+                .errorDecoder(new KMClientErrorDecoder())
+                .target(WSO2IS7SCIMSchemasClient.class, schemasEndpoint);
 
         wso2IS7APIResourceManagementClient = Feign.builder()
                 .client(new ApacheFeignHttpClient(APIUtil.getHttpClient(apiResourceManagementEndpoint)))
@@ -1491,7 +1509,9 @@ public class WSO2IS7KeyManager extends AbstractKeyManager {
             String accessToken = properties.get(APIConstants.KeyManager.ACCESS_TOKEN).toString();
             try {
                 JsonObject scimUserObjectString = wso2IS7SCIMMeClient.getMe(accessToken);
-                Map<String, String> claims = AttributeMapper.getUserClaims(scimUserObjectString.toString());
+                JsonArray scimSchemas = wso2IS7SCIMSchemasClient.getSchemas(accessToken);
+                Map<String, String> claims = AttributeMapper.getUserClaims(scimUserObjectString.toString(),
+                        scimSchemas);
                 Map<String, String> claimMappings = getClaimMappings();
                 userClaims = getMappedAttributes(claims, claimMappings);
             } catch (KeyManagerClientException e) {
