@@ -47,6 +47,7 @@ import org.wso2.carbon.apimgt.api.model.Scope;
 import org.wso2.carbon.apimgt.api.model.URITemplate;
 import org.wso2.carbon.apimgt.impl.APIConstants;
 import org.wso2.carbon.apimgt.impl.AbstractKeyManager;
+import org.wso2.carbon.apimgt.impl.caching.CacheProvider;
 import org.wso2.carbon.apimgt.impl.internal.ServiceReferenceHolder;
 import org.wso2.carbon.apimgt.impl.kmclient.ApacheFeignHttpClient;
 import org.wso2.carbon.apimgt.impl.kmclient.FormEncoder;
@@ -783,6 +784,11 @@ public class WSO2IS7KeyManager extends AbstractKeyManager {
                 .target(WSO2IS7SCIMRolesClient.class, rolesEndpoint);
 
         claimMappings = ClaimMappingReader.loadClaimMappings();
+        if (configuration.getParameter(APIConstants.KeyManager.USER_SCHEMA_CACHE_ENABLED) != null &&
+                Boolean.parseBoolean(
+                        configuration.getParameter(APIConstants.KeyManager.USER_SCHEMA_CACHE_ENABLED).toString())) {
+            CacheProvider.createUserSchemaCache();
+        }
     }
 
     @Override
@@ -1511,7 +1517,7 @@ public class WSO2IS7KeyManager extends AbstractKeyManager {
                 JsonObject scimUserObjectString = wso2IS7SCIMMeClient.getMe(accessToken);
                 JsonArray scimSchemas = wso2IS7SCIMSchemasClient.getSchemas(accessToken);
                 Map<String, String> claims = AttributeMapper.getUserClaims(scimUserObjectString.toString(),
-                        scimSchemas);
+                        scimSchemas, configuration, tenantDomain);
                 Map<String, String> claimMappings = getClaimMappings();
                 userClaims = getMappedAttributes(claims, claimMappings);
             } catch (KeyManagerClientException e) {

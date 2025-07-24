@@ -25,6 +25,9 @@ import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.collections.MapUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.wso2.carbon.apimgt.api.APIManagementException;
+import org.wso2.carbon.apimgt.api.model.KeyManagerConfiguration;
+import org.wso2.carbon.apimgt.impl.APIConstants;
+import org.wso2.carbon.apimgt.impl.caching.CacheProvider;
 import org.wso2.carbon.identity.core.util.IdentityUtil;
 import org.wso2.charon3.core.attributes.Attribute;
 import org.wso2.charon3.core.attributes.ComplexAttribute;
@@ -79,7 +82,7 @@ public class AttributeMapper {
     @Deprecated
     public static Map<String, String> getUserClaims(String scimUserObjectString) throws APIManagementException {
 
-        return getUserClaims(scimUserObjectString, null);
+        return getUserClaims(scimUserObjectString, null, null, null);
     }
 
     /**
@@ -87,12 +90,64 @@ public class AttributeMapper {
      *
      * @param scimUserObjectString      SCIM 2.0 Payload of a user info.
      * @param scimSchemaObject          SCIM 2.0 Payload of a schemas info.
+     * @param keyManagerConfiguration   KeyManagerConfiguration object containing configurations for the key manager.
+     * @param tenantDomain              Tenant domain of the user.
      * @return                          A map that contains the SCIM URI and the value of the claim.
      * @throws APIManagementException   If an error occurs while decoding the SCIM object, or getting the claims.
      */
-    public static Map<String, String> getUserClaims(String scimUserObjectString, JsonArray scimSchemaObject)
-            throws APIManagementException {
+    public static Map<String, String> getUserClaims(String scimUserObjectString, JsonArray scimSchemaObject,
+                                                    KeyManagerConfiguration keyManagerConfiguration,
+                                                    String tenantDomain) throws APIManagementException {
         JSONDecoder jsonDecoder = new JSONDecoder();
+        SCIMResourceTypeSchema schema = null;
+
+        if (keyManagerConfiguration != null &&
+                keyManagerConfiguration.getParameter(APIConstants.KeyManager.USER_SCHEMA_CACHE_ENABLED) != null &&
+                Boolean.parseBoolean(keyManagerConfiguration.getParameter
+                        (APIConstants.KeyManager.USER_SCHEMA_CACHE_ENABLED).toString())) {
+            String userSchemaCacheKey = keyManagerConfiguration.getName() + ":" + tenantDomain;
+
+            Object cache = CacheProvider.getUserSchemaCache().get(userSchemaCacheKey);
+            if (cache instanceof SCIMResourceTypeSchema) {
+                schema = (SCIMResourceTypeSchema) cache;
+            }
+            if (schema == null) {
+                synchronized (userSchemaCacheKey.intern()) {
+                    cache = CacheProvider.getUserSchemaCache().get(userSchemaCacheKey);
+                    if (cache instanceof SCIMResourceTypeSchema) {
+                        schema = (SCIMResourceTypeSchema) cache;
+                    } else {
+                        schema = getUserSchema(scimSchemaObject);
+                        if (schema != null) {
+                            CacheProvider.getUserSchemaCache().put(userSchemaCacheKey, schema);
+                        }
+                    }
+                }
+            }
+        } else {
+            schema = getUserSchema(scimSchemaObject);
+        }
+
+        Map<String, String> claims = new HashMap<>();
+        try {
+            AbstractSCIMObject abstractSCIMObject = jsonDecoder.decode(scimUserObjectString, schema);
+            if (abstractSCIMObject instanceof User) {
+                claims = getClaimsMap(abstractSCIMObject);
+            }
+        } catch (CharonException | BadRequestException e) {
+            throw new APIManagementException("Error occurred while decoding the user attributes", e);
+        }
+        return claims;
+    }
+
+    /**
+     * Get the user schemas.
+     *
+     * @param scimSchemaObject The SCIM schema object containing user schema information.
+     * @return A SCIMResourceTypeSchema representing the user schema.
+     * @throws APIManagementException If an error occurs while processing the SCIM schema object.
+     */
+    private static SCIMResourceTypeSchema getUserSchema(JsonArray scimSchemaObject) throws APIManagementException {
         String customSchemaUri = WSO2ISConstants.SCIM2_CUSTOM_SCHEMA_URI;
         SCIMResourceTypeSchema schema = SCIM_USER_SCHEMA;
 
@@ -102,7 +157,8 @@ public class AttributeMapper {
         if (scimSchemaObject != null) {
             for (JsonElement element : scimSchemaObject) {
                 JsonObject obj = element.isJsonObject() ? element.getAsJsonObject() : null;
-                String id = obj != null && obj.get("id") != null ? obj.get("id").getAsString() : StringUtils.EMPTY;
+                String id = obj != null && obj.get(SCIMConstants.CommonSchemaConstants.ID) != null ?
+                        obj.get(SCIMConstants.CommonSchemaConstants.ID).getAsString() : StringUtils.EMPTY;
                 if (SCIM2_ENTERPRISE_SCHEMA.equalsIgnoreCase(id)) {
                     if (extensionAttributes != null) {
                         addAttributesToComplexAttribute(extensionAttributes, obj, null);
@@ -128,16 +184,7 @@ public class AttributeMapper {
             schema.getAttributesList().add(customAttributes);
         }
 
-        Map<String, String> claims = new HashMap<>();
-        try {
-            AbstractSCIMObject abstractSCIMObject = jsonDecoder.decode(scimUserObjectString, schema);
-            if (abstractSCIMObject instanceof User) {
-                claims = getClaimsMap(abstractSCIMObject);
-            }
-        } catch (CharonException | BadRequestException e) {
-            throw new APIManagementException("Error occurred while decoding the user attributes", e);
-        }
-        return claims;
+        return schema;
     }
 
     /**
